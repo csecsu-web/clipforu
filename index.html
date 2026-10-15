@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Clipper</title>
+<style>
+  :root { color-scheme: dark; --bg:#111; --card:#1c1c1e; --fg:#f2f2f2; --mut:#999; --acc:#e10600; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:900px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:22px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; margin:16px 0; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  button.sec { background:#333; }
+  input, select { background:#2a2a2c; color:var(--fg); border:1px solid #444; border-radius:6px; padding:6px 8px; }
+  input[type=number] { width:90px; }
+  video { width:100%; max-height:320px; background:#000; border-radius:8px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .mut { color:var(--mut); font-size:13px; }
+  .bar { height:8px; background:#333; border-radius:4px; overflow:hidden; }
+  .bar div { height:100%; background:var(--acc); width:0; transition:width .3s; }
+</style>
+</head>
+<body>
+<main>
+  <h1>My Clipper</h1>
+
+  <div class="card" id="up">
+    <div class="row">
+      <input type="file" id="file" accept="video/*">
+      <select id="lang">
+        <option value="">Auto-detect language</option>
+        <option value="hu">Hungarian</option>
+        <option value="en">English</option>
+      </select>
+      <button id="go">Upload &amp; analyse</button>
+    </div>
+    <p class="mut">Everything stays on this computer. Nothing is sent online.</p>
+  </div>
+
+  <div class="card" id="prog" hidden>
+    <div id="msg">Working...</div>
+    <div class="bar" style="margin-top:8px"><div id="fill"></div></div>
+  </div>
+
+  <div id="top" hidden class="row">
+    <button class="sec" id="del">Done: delete source video</button>
+    <span class="mut" id="saved"></span>
+  </div>
+
+  <div id="list"></div>
+</main>
+
+<script>
+let jobId = null;
+const $ = id => document.getElementById(id);
+
+$('go').onclick = async () => {
+  const f = $('file').files[0];
+  if (!f) return alert('Choose a video first');
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('language', $('lang').value);
+  $('prog').hidden = false;
+  $('msg').textContent = 'Uploading...';
+  const r = await fetch('/api/upload', { method: 'POST', body: fd });
+  jobId = (await r.json()).id;
+  poll();
+};
+
+async function poll() {
+  const j = await (await fetch('/api/job/' + jobId)).json();
+  if (j.status === 'error') { $('msg').textContent = 'Error: ' + j.error; return; }
+  if (j.status !== 'ready') {
+    $('msg').textContent = j.status === 'transcribing'
+      ? 'Transcribing... ' + j.progress + '% (first run downloads the model)'
+      : 'Starting...';
+    $('fill').style.width = j.progress + '%';
+    return setTimeout(poll, 1500);
+  }
+  $('prog').hidden = true;
+  $('top').hidden = false;
+  render(j.candidates);
+}
+
+const fmt = t => Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+
+function render(cands) {
+  $('list').innerHTML = '';
+  cands.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.innerHTML = `
+      <video controls preload="metadata" src="/api/video/${jobId}#t=${c.start},${c.end}"></video>
+      <p class="mut">Score ${c.score} &middot; ${fmt(c.start)}&ndash;${fmt(c.end)}</p>
+      <p>${c.text.slice(0, 220)}${c.text.length > 220 ? '...' : ''}</p>
+      <div class="row">
+        <label>Start <input type="number" step="0.1" class="s" value="${c.start}"></label>
+        <label>End <input type="number" step="0.1" class="e" value="${c.end}"></label>
+        <label><input type="checkbox" class="cap" checked> Captions</label>
+        <label>Crop position <input type="range" class="crop" min="0" max="1" step="0.05" value="0.5"></label>
+      </div>
+      <div class="row"><button class="exp">Export clip</button><span class="mut out"></span></div>`;
+    const v = el.querySelector('video');
+    const upd = () => { v.src = `/api/video/${jobId}#t=${el.querySelector('.s').value},${el.querySelector('.e').value}`; };
+    el.querySelector('.s').onchange = upd;
+    el.querySelector('.e').onchange = upd;
+    el.querySelector('.exp').onclick = async () => {
+      const out = el.querySelector('.out');
+      out.textContent = 'Exporting...';
+      const r = await fetch('/api/export/' + jobId, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          start: el.querySelector('.s').value, end: el.querySelector('.e').value,
+          captions: el.querySelector('.cap').checked, crop: el.querySelector('.crop').value })
+      });
+      const d = await r.json();
+      out.textContent = d.error ? 'Failed: ' + d.error : 'Saved: ' + d.file;
+      if (!d.error) $('saved').textContent = 'Clips folder: ' + d.folder;
+    };
+    $('list').appendChild(el);
+  });
+}
+
+$('del').onclick = async () => {
+  if (!confirm('Delete the source video from the work folder? Exported clips are kept.')) return;
+  await fetch('/api/delete/' + jobId, { method: 'POST' });
+  $('list').innerHTML = '';
+  $('top').hidden = true;
+  $('msg').textContent = '';
+  alert('Source deleted. Your exported clips are still saved.');
+};
+</script>
+</body>
+</html>
