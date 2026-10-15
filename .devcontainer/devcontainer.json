@@ -1,0 +1,12 @@
+{
+  "name": "clipper",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y ffmpeg && pip install flask faster-whisper",
+  "postAttachCommand": "python app.py",
+  "containerEnv": {
+    "CLIPS_DIR": "${containerWorkspaceFolder}/clips",
+    "WHISPER_MODEL": "base"
+  },
+  "forwardPorts": [5050],
+  "portsAttributes": { "5050": { "label": "Clipper", "onAutoForward": "openBrowser" } }
+}
