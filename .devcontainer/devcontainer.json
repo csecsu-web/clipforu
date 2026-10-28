@@ -1,12 +1,21 @@
 {
-  "name": "clipper",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11",
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y ffmpeg && pip install flask faster-whisper",
-  "postAttachCommand": "python app.py",
+  "name": "Clipforu private clipper",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y ffmpeg && python -m venv .venv && .venv/bin/pip install -r requirements.txt",
+  "postStartCommand": "bash .devcontainer/start.sh",
   "containerEnv": {
     "CLIPS_DIR": "${containerWorkspaceFolder}/clips",
-    "WHISPER_MODEL": "base"
+    "CLIP_WORK_DIR": "${containerWorkspaceFolder}/work",
+    "WHISPER_MODEL": "base",
+    "MAX_UPLOAD_GB": "20",
+    "JOB_TTL_HOURS": "6"
   },
   "forwardPorts": [5050],
-  "portsAttributes": { "5050": { "label": "Clipper", "onAutoForward": "openBrowser" } }
+  "portsAttributes": {
+    "5050": {
+      "label": "Private Clipforu",
+      "onAutoForward": "openBrowser",
+      "visibility": "private"
+    }
+  }
 }
