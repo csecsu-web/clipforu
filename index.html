@@ -1,134 +1,224 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>My Clipper</title>
 <style>
-  :root { color-scheme: dark; --bg:#111; --card:#1c1c1e; --fg:#f2f2f2; --mut:#999; --acc:#e10600; }
-  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  main { max-width:900px; margin:0 auto; padding:24px 16px 80px; }
-  h1 { font-size:22px; }
-  .card { background:var(--card); border-radius:12px; padding:16px; margin:16px 0; }
-  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:15px; cursor:pointer; }
-  button.sec { background:#333; }
-  input, select { background:#2a2a2c; color:var(--fg); border:1px solid #444; border-radius:6px; padding:6px 8px; }
-  input[type=number] { width:90px; }
-  video { width:100%; max-height:320px; background:#000; border-radius:8px; }
-  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:10px; }
-  .mut { color:var(--mut); font-size:13px; }
-  .bar { height:8px; background:#333; border-radius:4px; overflow:hidden; }
-  .bar div { height:100%; background:var(--acc); width:0; transition:width .3s; }
+  :root { color-scheme: dark; --bg:#111; --card:#1c1c1e; --fg:#f2f2f2; --mut:#aaa; --acc:#e10600; }
+  * { box-sizing:border-box }
+  body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg) }
+  main { max-width:900px; margin:0 auto; padding:24px 16px 80px }
+  h1 { font-size:24px } h2 { font-size:18px; margin:0 0 12px }
+  .card { background:var(--card); border-radius:12px; padding:16px; margin:16px 0 }
+  button { background:var(--acc); color:white; border:0; border-radius:8px; padding:10px 16px; font-size:15px; cursor:pointer }
+  button:disabled { opacity:.55; cursor:wait } button.sec { background:#333 }
+  a { color:#ff8b85 }
+  input,select { background:#2a2a2c; color:var(--fg); border:1px solid #555; border-radius:6px; padding:7px 8px }
+  input[type=number] { width:100px } input[type=range] { vertical-align:middle }
+  video { width:100%; max-height:340px; background:#000; border-radius:8px }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:10px }
+  .mut { color:var(--mut); font-size:13px; line-height:1.5 }
+  .bar { height:8px; background:#333; border-radius:4px; overflow:hidden; margin-top:9px }
+  .bar div { height:100%; background:var(--acc); width:0; transition:width .3s }
+  #message { white-space:pre-wrap; overflow-wrap:anywhere }
+  .candidate-text { line-height:1.5 }
+  .warning { border-left:3px solid #e0a400; padding-left:10px }
 </style>
 </head>
 <body>
 <main>
   <h1>My Clipper</h1>
-
-  <div class="card" id="up">
+  <section class="card" id="upload-card">
+    <h2>Choose a video</h2>
+    <p class="mut warning">This app runs in your GitHub Codespace. Your video is uploaded to that Codespace while you work on it. Delete the source when you finish. Unfinished jobs are removed after 6 hours; exported clips stay in the Codespace until you download them or delete them.</p>
     <div class="row">
-      <input type="file" id="file" accept="video/*">
-      <select id="lang">
-        <option value="">Auto-detect language</option>
-        <option value="hu">Hungarian</option>
-        <option value="en">English</option>
+      <input type="file" id="file" accept="video/mp4,video/quicktime,video/x-matroska,video/webm,video/x-m4v,video/x-msvideo">
+      <select id="lang" aria-label="Video language">
+        <option value="">Auto-detect language</option><option value="hu">Hungarian</option><option value="en">English</option>
       </select>
       <button id="go">Upload &amp; analyse</button>
     </div>
-    <p class="mut">Everything stays on this computer. Nothing is sent online.</p>
-  </div>
+    <p class="mut">30-minute videos are supported. Processing time depends on the Codespace CPU. The first run downloads the speech model and can take longer. The app checks available storage before saving an upload.</p>
+  </section>
 
-  <div class="card" id="prog" hidden>
-    <div id="msg">Working...</div>
-    <div class="bar" style="margin-top:8px"><div id="fill"></div></div>
-  </div>
+  <section class="card" id="progress" hidden>
+    <div id="message" role="status" aria-live="polite">Waiting…</div>
+    <div class="bar"><div id="fill"></div></div>
+  </section>
 
-  <div id="top" hidden class="row">
-    <button class="sec" id="del">Done: delete source video</button>
+  <section id="result-actions" class="row" hidden>
+    <button class="sec" id="delete">Delete source video and transcript</button>
     <span class="mut" id="saved"></span>
-  </div>
-
-  <div id="list"></div>
+  </section>
+  <section id="list" aria-live="polite"></section>
 </main>
-
 <script>
 let jobId = null;
-const $ = id => document.getElementById(id);
+let pollTimer = null;
+const byId = id => document.getElementById(id);
+const statusBox = byId('progress');
 
-$('go').onclick = async () => {
-  const f = $('file').files[0];
-  if (!f) return alert('Choose a video first');
-  const fd = new FormData();
-  fd.append('file', f);
-  fd.append('language', $('lang').value);
-  $('prog').hidden = false;
-  $('msg').textContent = 'Uploading...';
-  const r = await fetch('/api/upload', { method: 'POST', body: fd });
-  jobId = (await r.json()).id;
-  poll();
+function showError(message) {
+  statusBox.hidden = false;
+  byId('message').textContent = message;
+  byId('fill').style.width = '0%';
+}
+
+byId('go').onclick = () => {
+  const file = byId('file').files[0];
+  if (!file) return showError('Choose a video first.');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('language', byId('lang').value);
+  byId('go').disabled = true;
+  byId('list').replaceChildren();
+  byId('result-actions').hidden = true;
+  statusBox.hidden = false;
+  byId('message').textContent = `Uploading ${file.name} (${(file.size / 1024 ** 3).toFixed(2)} GB)…`;
+  byId('fill').style.width = '0%';
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload');
+  xhr.upload.onprogress = event => {
+    if (event.lengthComputable) {
+      const percent = Math.floor(100 * event.loaded / event.total);
+      byId('fill').style.width = percent + '%';
+      byId('message').textContent = `Uploading… ${percent}%`;
+    }
+  };
+  xhr.onerror = () => { byId('go').disabled = false; showError('Upload failed. Check your connection to the Codespace and try again.'); };
+  xhr.onload = () => {
+    let data;
+    try { data = JSON.parse(xhr.responseText); } catch { data = {}; }
+    if (xhr.status < 200 || xhr.status >= 300) {
+      byId('go').disabled = false;
+      return showError(data.error || `Upload failed (HTTP ${xhr.status}).`);
+    }
+    jobId = data.id;
+    poll();
+  };
+  xhr.send(form);
 };
 
 async function poll() {
-  const j = await (await fetch('/api/job/' + jobId)).json();
-  if (j.status === 'error') { $('msg').textContent = 'Error: ' + j.error; return; }
-  if (j.status !== 'ready') {
-    $('msg').textContent = j.status === 'transcribing'
-      ? 'Transcribing... ' + j.progress + '% (first run downloads the model)'
-      : 'Starting...';
-    $('fill').style.width = j.progress + '%';
-    return setTimeout(poll, 1500);
+  clearTimeout(pollTimer);
+  try {
+    const response = await fetch('/api/job/' + encodeURIComponent(jobId));
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || 'This job expired or the Codespace restarted.');
+    if (job.status === 'error') {
+      byId('message').textContent = 'Analysis failed: ' + (job.error || 'Unknown error');
+      byId('result-actions').hidden = false;
+      byId('go').disabled = false;
+      return;
+    }
+    if (job.status !== 'ready') {
+      byId('message').textContent = job.status === 'transcribing'
+        ? `Transcribing the full video… ${job.progress}% (first run may download the model)`
+        : 'Starting transcription… The first run may take a few minutes to load the model.';
+      byId('fill').style.width = job.progress + '%';
+      pollTimer = setTimeout(poll, 1800);
+      return;
+    }
+    byId('progress').hidden = true;
+    byId('result-actions').hidden = false;
+    byId('go').disabled = false;
+    render(job.candidates);
+    if (!job.candidates.length) showError('The transcript was created, but no 20–60 second candidate windows were found. Try another language or a longer recording with speech.');
+  } catch (error) {
+    showError(error.message || 'Could not check analysis status.');
+    byId('go').disabled = false;
+    if (jobId) byId('result-actions').hidden = false;
   }
-  $('prog').hidden = true;
-  $('top').hidden = false;
-  render(j.candidates);
 }
 
-const fmt = t => Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+const formatTime = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
-function render(cands) {
-  $('list').innerHTML = '';
-  cands.forEach(c => {
-    const el = document.createElement('div');
-    el.className = 'card';
-    el.innerHTML = `
-      <video controls preload="metadata" src="/api/video/${jobId}#t=${c.start},${c.end}"></video>
-      <p class="mut">Score ${c.score} &middot; ${fmt(c.start)}&ndash;${fmt(c.end)}</p>
-      <p>${c.text.slice(0, 220)}${c.text.length > 220 ? '...' : ''}</p>
-      <div class="row">
-        <label>Start <input type="number" step="0.1" class="s" value="${c.start}"></label>
-        <label>End <input type="number" step="0.1" class="e" value="${c.end}"></label>
-        <label><input type="checkbox" class="cap" checked> Captions</label>
-        <label>Crop position <input type="range" class="crop" min="0" max="1" step="0.05" value="0.5"></label>
-      </div>
-      <div class="row"><button class="exp">Export clip</button><span class="mut out"></span></div>`;
-    const v = el.querySelector('video');
-    const upd = () => { v.src = `/api/video/${jobId}#t=${el.querySelector('.s').value},${el.querySelector('.e').value}`; };
-    el.querySelector('.s').onchange = upd;
-    el.querySelector('.e').onchange = upd;
-    el.querySelector('.exp').onclick = async () => {
-      const out = el.querySelector('.out');
-      out.textContent = 'Exporting...';
-      const r = await fetch('/api/export/' + jobId, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          start: el.querySelector('.s').value, end: el.querySelector('.e').value,
-          captions: el.querySelector('.cap').checked, crop: el.querySelector('.crop').value })
-      });
-      const d = await r.json();
-      out.textContent = d.error ? 'Failed: ' + d.error : 'Saved: ' + d.file;
-      if (!d.error) $('saved').textContent = 'Clips folder: ' + d.folder;
+function render(candidates) {
+  const list = byId('list');
+  list.replaceChildren();
+  if (!candidates.length) return;
+  const heading = document.createElement('h2');
+  heading.textContent = 'Suggested moments';
+  list.append(heading);
+  const note = document.createElement('p');
+  note.className = 'mut';
+  note.textContent = 'Ranked using transcript wording, sentence endings, and clip length. These are suggestions, not an AI judgment of the video’s meaning or visuals. Preview each moment before exporting.';
+  list.append(note);
+  candidates.forEach(candidate => {
+    const card = document.createElement('article');
+    card.className = 'card';
+    const video = document.createElement('video');
+    video.controls = true;
+    video.preload = 'metadata';
+    const start = document.createElement('input'); start.type = 'number'; start.step = '0.1'; start.className = 'start'; start.value = candidate.start;
+    const end = document.createElement('input'); end.type = 'number'; end.step = '0.1'; end.className = 'end'; end.value = candidate.end;
+    const setPreview = () => { video.src = `/api/video/${encodeURIComponent(jobId)}#t=${start.value},${end.value}`; };
+    setPreview();
+    const meta = document.createElement('p'); meta.className = 'mut';
+    meta.textContent = `Suggestion ${candidate.id + 1} · score ${candidate.score} · ${formatTime(candidate.start)}–${formatTime(candidate.end)}`;
+    const transcript = document.createElement('p'); transcript.className = 'candidate-text';
+    transcript.textContent = candidate.text;
+    const controls = document.createElement('div'); controls.className = 'row';
+    const startLabel = document.createElement('label'); startLabel.textContent = 'Start '; startLabel.append(start);
+    const endLabel = document.createElement('label'); endLabel.textContent = 'End '; endLabel.append(end);
+    const captionLabel = document.createElement('label');
+    const captions = document.createElement('input'); captions.type = 'checkbox'; captions.checked = true;
+    captionLabel.append(captions, document.createTextNode(' Captions'));
+    const cropLabel = document.createElement('label'); cropLabel.textContent = 'Crop position ';
+    const crop = document.createElement('input'); crop.type = 'range'; crop.min = '0'; crop.max = '1'; crop.step = '0.05'; crop.value = '0.5'; cropLabel.append(crop);
+    start.onchange = end.onchange = setPreview;
+    controls.append(startLabel, endLabel, captionLabel, cropLabel);
+    const actions = document.createElement('div'); actions.className = 'row';
+    const exportButton = document.createElement('button'); exportButton.textContent = 'Export clip';
+    const output = document.createElement('span'); output.className = 'mut';
+    exportButton.onclick = async () => {
+      exportButton.disabled = true; output.textContent = 'Exporting…';
+      try {
+        const response = await fetch('/api/export/' + encodeURIComponent(jobId), {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({start:start.value, end:end.value, captions:captions.checked, crop:crop.value})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `Export failed (HTTP ${response.status}).`);
+        output.replaceChildren();
+        const download = document.createElement('a');
+        download.href = '/api/clips/' + encodeURIComponent(data.file);
+        download.textContent = `Download ${data.file}`;
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.className = 'sec'; remove.textContent = 'Delete clip';
+        remove.onclick = async () => {
+          remove.disabled = true;
+          try {
+            const deleted = await fetch('/api/clips/' + encodeURIComponent(data.file), {method:'DELETE'});
+            if (!deleted.ok) throw new Error('Could not delete the exported clip.');
+            output.textContent = 'Exported clip deleted from the Codespace.';
+          } catch (error) { output.textContent = error.message; remove.disabled = false; }
+        };
+        output.append(download, document.createTextNode(' · '), remove);
+        byId('saved').textContent = `Exports: ${data.folder}`;
+      } catch (error) { output.textContent = 'Failed: ' + error.message; }
+      finally { exportButton.disabled = false; }
     };
-    $('list').appendChild(el);
+    actions.append(exportButton, output);
+    card.append(video, meta, transcript, controls, actions);
+    list.append(card);
   });
 }
 
-$('del').onclick = async () => {
-  if (!confirm('Delete the source video from the work folder? Exported clips are kept.')) return;
-  await fetch('/api/delete/' + jobId, { method: 'POST' });
-  $('list').innerHTML = '';
-  $('top').hidden = true;
-  $('msg').textContent = '';
-  alert('Source deleted. Your exported clips are still saved.');
+byId('delete').onclick = async () => {
+  if (!jobId || !confirm('Delete the uploaded source and transcript from the Codespace? Exported clips will stay in its clips folder.')) return;
+  try {
+    const response = await fetch('/api/delete/' + encodeURIComponent(jobId), {method:'POST'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not delete this source.');
+    clearTimeout(pollTimer);
+    jobId = null;
+    byId('list').replaceChildren();
+    byId('result-actions').hidden = true;
+    byId('progress').hidden = true;
+    byId('saved').textContent = '';
+  } catch (error) { showError(error.message); }
 };
 </script>
 </body>
